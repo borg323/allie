@@ -15,10 +15,18 @@ install:
 - cmd: IF NOT EXIST c:\cache\protobuf_build\ cmake -G "Visual Studio 15 2017 Win64" -Dprotobuf_BUILD_SHARED_LIBS=NO -Dprotobuf_MSVC_STATIC_RUNTIME=NO -Dprotobuf_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=c:/cache/protobuf_build ../cmake
 - cmd: IF NOT EXIST c:\cache\protobuf_build\ msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 - cmd: set PATH=c:\cache\protobuf_build\bin;%PATH%
+- cmd: IF NOT EXIST c:\cache\zlib_build\ appveyor DownloadFile http://zlib.net/zlib-1.2.11.tar.gz
+- cmd: IF NOT EXIST c:\cache\zlib_build\ 7z x zlib-1.2.11.tar.gz
+- cmd: IF NOT EXIST c:\cache\zlib_build\ 7z x zlib-1.2.11.tar
+- cmd: IF NOT EXIST c:\cache\zlib_build\ mkdir zlib-1.2.11\build
+- cmd: IF NOT EXIST c:\cache\zlib_build\ cd zlib-1.2.11\build
+- cmd: IF NOT EXIST c:\cache\zlib_build\ cmake -G "Visual Studio 15 2017 Win64" -DCMAKE_INSTALL_PREFIX=c:/cache/zlib_build ..
+- cmd: IF NOT EXIST c:\cache\zlib_build\ msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 - cmd: cd C:\projects\allie
 - cmd: set PATH=%PATH%;C:\Qt\5.12.1\msvc2017_64\bin;
 cache:
   - C:\cache
+  - 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.0'
 build_script:
 - cmd: qmake allie.pro
 - cmd: nmake
