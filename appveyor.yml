@@ -2,7 +2,16 @@ image:
 - Visual Studio 2017
 install:
 - cmd: call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
+- cmd: IF NOT EXIST c:\cache\protobuf_build\ git clone -b v3.5.1 --single-branch --depth 1 https://github.com/google/protobuf.git
+- cmd: IF NOT EXIST c:\cache\protobuf_build\ mkdir protobuf\build_msvc
+- cmd: IF NOT EXIST c:\cache\protobuf_build\ cd protobuf\build_msvc
+- cmd: IF NOT EXIST c:\cache\protobuf_build\ cmake -G "Visual Studio 15 2017 Win64" -Dprotobuf_BUILD_SHARED_LIBS=NO -Dprotobuf_MSVC_STATIC_RUNTIME=NO -Dprotobuf_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=c:/cache/protobuf_build ../cmake
+- cmd: IF NOT EXIST c:\cache\protobuf_build\ msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m
+- cmd: set PATH=c:\cache\protobuf_build\bin;%PATH%
+- cmd: cd C:\projects\allie
 - cmd: set PATH=%PATH%;C:\Qt\5.12.1\msvc2017_64\bin;
+cache:
+  - C:\cache
 build_script:
 - cmd: qmake allie.pro
 - cmd: nmake
