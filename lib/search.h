@@ -56,9 +56,10 @@ struct WorkerInfo {
     int nodesSearched = 0;
     int nodesSearchedTotal = 0;
     int nodesEvaluated = 0;
+    int nodesCreated = 0;
     int numberOfBatches = 0;
     int nodesCacheHits = 0;
-    int nodesPruned = 0;
+    int nodesTBHits = 0;
     QString threadId;
 };
 
@@ -70,7 +71,6 @@ struct SearchInfo {
     QString score;
     int nps = -1;
     int batchSize = -1;
-    int tbhits = -1;
     QString pv;
     int rawnps = -1;
     Trend trend = Better;

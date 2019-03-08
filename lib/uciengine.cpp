@@ -21,6 +21,7 @@
 #include "uciengine.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QStringList>
@@ -38,8 +39,10 @@
 #include "notation.h"
 #include "options.h"
 #include "searchengine.h"
+#include "tb.h"
 
-//#define LOG
+#define LOG
+//#define AVERAGES
 #if defined(LOG)
 static bool s_firstLog = true;
 #endif
@@ -132,9 +135,9 @@ void g_uciMessageHandler(QtMsgType type, const QMessageLogContext &context, cons
     QString format;
     QTextStream out(&format);
     if (QLatin1String(context.category) == QLatin1Literal("input")) {
-        out << "Input:" << endl << msg << endl;
+        out << "Input: " << msg << endl;
     } else if (QLatin1String(context.category) == QLatin1Literal("output")) {
-        out << "Output:"  << endl << msg;
+        out << "Output: " << msg;
         fprintf(stdout, "%s", qPrintable(msg));
         fflush(stdout);
     } else {
@@ -161,17 +164,17 @@ void g_uciMessageHandler(QtMsgType type, const QMessageLogContext &context, cons
 #if defined(LOG)
     QString logFilePath = QCoreApplication::applicationDirPath() +
         QDir::separator() + QCoreApplication::applicationName() +
-        "_" + QString::number(QCoreApplication::applicationPid()) + ".log";
+        "_debug.log";
     QFile file(logFilePath);
 
-    QIODevice::OpenMode mode = QIODevice::WriteOnly | QIODevice::Text;
-    if (!s_firstLog)
-        mode |= QIODevice::Append;
-
+    QIODevice::OpenMode mode = QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append;
     if (!file.open(mode))
         return;
 
     QTextStream log(&file);
+    if (s_firstLog)
+        log << "Output: log pid " << QCoreApplication::applicationPid() << " at "
+            << QDateTime::currentDateTime().toString() << "\n";
     log << format;
     s_firstLog = false;
 #endif
@@ -294,11 +297,14 @@ void UciEngine::readyRead(const QString &line)
         QList<QString> position = line.split(' ');
         QString pos = position.at(1);
         if (pos == QLatin1String("fen")) {
+            QList<QString> moves;
             QString fen = line.mid(13);
             int indexOfMoves = fen.indexOf(QLatin1String("moves "));
-            QString m = fen.mid(indexOfMoves + 6);
-            QList<QString> moves = m.split(' ');
-            fen.truncate(indexOfMoves - 1);
+            if (indexOfMoves > 0) {
+                QString m = indexOfMoves > 0 ? fen.mid(indexOfMoves + 6) : fen;
+                moves = m.split(' ');
+                fen.truncate(indexOfMoves - 1);
+            }
             setPosition(fen, moves.toVector());
         } else {
             QList<QString> moves;
@@ -410,22 +416,23 @@ void UciEngine::calculateRollingAverage(const SearchInfo &info)
     m_averageInfo.nodes             = rollingAverage(m_averageInfo.nodes, info.nodes, n);
     m_averageInfo.nps               = rollingAverage(m_averageInfo.nps, info.nps, n);
     m_averageInfo.batchSize         = rollingAverage(m_averageInfo.batchSize, info.batchSize, n);
-    m_averageInfo.tbhits            = rollingAverage(m_averageInfo.tbhits, info.tbhits, n);
     m_averageInfo.rawnps            = rollingAverage(m_averageInfo.rawnps, info.rawnps, n);
 
     WorkerInfo &avgW = m_averageInfo.workerInfo;
     const WorkerInfo &newW = info.workerInfo;
     avgW.nodesSearched     = rollingAverage(avgW.nodesSearched, newW.nodesSearched, n);
     avgW.nodesEvaluated    = rollingAverage(avgW.nodesEvaluated, newW.nodesEvaluated, n);
+    avgW.nodesCreated    = rollingAverage(avgW.nodesCreated, newW.nodesCreated, n);
+    avgW.nodesTBHits    = rollingAverage(avgW.nodesTBHits, newW.nodesTBHits, n);
     avgW.nodesCacheHits    = rollingAverage(avgW.nodesCacheHits, newW.nodesCacheHits, n);
-    avgW.nodesPruned       = rollingAverage(avgW.nodesPruned, newW.nodesPruned, n);
 }
 
 void UciEngine::sendBestMove(bool force)
 {
     // We don't have a best move yet!
     if (m_lastInfo.bestMove.isEmpty()) {
-        output("We have no more time and no bestmove!\n");
+        QString o = QString("No more time and no bestmove forced=%1!\n").arg(force ? "t" : "f");
+        output(o);
         if (!force)
             return;
     }
@@ -474,6 +481,13 @@ void UciEngine::sendInfo(const SearchInfo &info, bool isPartial)
         return;
     }
 
+    // Check if we've exceeded the ram limit for tree size
+    const quint64 treeSizeLimit = Options::globalInstance()->option("TreeSize").value().toUInt() * quint64(1024) * quint64(1024);
+    if (treeSizeLimit && quint64(info.workerInfo.nodesCreated) * sizeof(Node) > treeSizeLimit) {
+        sendBestMove(true /*force*/);
+        return;
+    }
+
     // Otherwise begin updating info
     qint64 msecs = m_clock->elapsed();
     m_lastInfo.time = msecs;
@@ -513,8 +527,8 @@ void UciEngine::sendInfo(const SearchInfo &info, bool isPartial)
                << " efficiency " << m_lastInfo.workerInfo.nodesSearched / float(m_lastInfo.workerInfo.nodesEvaluated)
                << " nodesSearched " << m_lastInfo.workerInfo.nodesSearched
                << " nodesEvaluated " << m_lastInfo.workerInfo.nodesEvaluated
+               << " nodesCreated " << m_lastInfo.workerInfo.nodesCreated
                << " nodesCacheHits " << m_lastInfo.workerInfo.nodesCacheHits
-               << " nodesPruned " << m_lastInfo.workerInfo.nodesPruned
                << endl;
     }
 
@@ -529,7 +543,7 @@ void UciEngine::sendInfo(const SearchInfo &info, bool isPartial)
            << " score " << m_lastInfo.score
            << " time " << m_lastInfo.time
            << " hashfull " << qRound(Hash::globalInstance()->percentFull(g.halfMoveNumber()) * 1000.0f)
-           << " tbhits " << m_lastInfo.tbhits
+           << " tbhits " << m_lastInfo.workerInfo.nodesTBHits
            << " pv " << m_lastInfo.pv
            << endl;
 
@@ -550,13 +564,13 @@ void UciEngine::sendAverages()
            << " nodes " << m_averageInfo.nodes
            << " nps " << m_averageInfo.nps
            << " batchSize " << m_averageInfo.batchSize
-           << " tbhits " << m_averageInfo.tbhits
            << " rawnps " << m_averageInfo.rawnps
            << " efficiency " << m_averageInfo.workerInfo.nodesSearched / float(m_averageInfo.workerInfo.nodesEvaluated)
            << " nodesSearched " << m_averageInfo.workerInfo.nodesSearched
            << " nodesEvaluated " << m_averageInfo.workerInfo.nodesEvaluated
+           << " nodesCreated " << m_averageInfo.workerInfo.nodesCreated
+           << " nodesTBHits " << m_averageInfo.workerInfo.nodesTBHits
            << " nodesCacheHits " << m_averageInfo.workerInfo.nodesCacheHits
-           << " nodesPruned " << m_averageInfo.workerInfo.nodesPruned
            << endl;
     output(out);
 }
@@ -578,10 +592,11 @@ void UciEngine::uciNewGame()
 
     Hash::globalInstance()->reset();
     NeuralNet::globalInstance()->reset();
+    TB::globalInstance()->reset();
     m_searchEngine->reset();
 
     m_averageInfo = SearchInfo();
-#if defined(LOG)
+#if defined(AVERAGES)
     if (m_averageInfo.depth != -1)
         sendAverages();
 #endif
@@ -604,7 +619,7 @@ void UciEngine::stop()
 void UciEngine::quit()
 {
     //qDebug() << "quit";
-#if defined(LOG)
+#if defined(AVERAGES)
     sendAverages();
 #endif
     Q_ASSERT(m_searchEngine && m_gameInitialized);

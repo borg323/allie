@@ -18,41 +18,35 @@
   Additional permission under GNU GPL version 3 section 7
 */
 
-#ifndef HISTORY_H
-#define HISTORY_H
+#ifndef TB_H
+#define TB_H
 
 #include <QtGlobal>
 
 #include "game.h"
 
-class History {
+class TB {
 public:
-    static History *globalInstance();
+    enum Probe {
+        NotFound,
+        Win,
+        Loss,
+        Draw
+    };
 
-    QVector<Game> games() const { return m_history; }
+    static TB *globalInstance();
 
-    Game currentGame() const
-    {
-        if (m_history.isEmpty())
-            return Game();
-        return m_history.last();
-    }
+    void reset();
 
-    void addGame(const Game &game);
+    bool isEnabled() const { return m_enabled; }
 
-    void clear()
-    {
-        m_history.clear();
-    }
+    Probe probe(const Game &game) const;
 
 private:
-    History()
-    {
-    }
-
-    ~History() {}
-    QVector<Game> m_history;
-    friend class MyHistory;
+    TB();
+    ~TB();
+    bool m_enabled;
+    friend class MyTB;
 };
 
-#endif // HISTORY_H
+#endif // TB_H

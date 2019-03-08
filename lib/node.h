@@ -78,7 +78,7 @@ public:
 
     Game game() const { return m_game; }
 
-    QVector<Game> previousMoves() const;
+    QVector<Game> previousMoves(bool fullHistory) const;
 
     template<Traversal t>
     TreeIterator<t> begin() { return TreeIterator<t>(this); }
@@ -129,7 +129,7 @@ public:
     void backPropagateValueFull();
     void setQValueAndPropagate();
     bool isAlreadyPlayingOut() const;
-    Node *playout(int *depth);
+    Node *playout(int *depth, bool *createdNode);
 
     bool hasPValue() const;
     float pValue() const { return m_pValue; }
@@ -155,7 +155,7 @@ public:
 
     // children and potential generation
     bool hasNoisyChildren() const;
-    void generatePotentials();
+    bool generatePotentials();
     void generatePotential(const Move &move);
     Node *generateChild(PotentialNode *potential);
 
@@ -176,7 +176,6 @@ private:
     float m_rawQValue;
     float m_pValue;
     mutable float m_uCoeff;
-    mutable qint8 m_repetitions;
     bool m_isExact: 1;
     bool m_isPrefetch: 1;
     std::atomic_flag m_scoringOrScored;

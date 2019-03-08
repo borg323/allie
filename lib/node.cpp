@@ -23,6 +23,7 @@
 #include "history.h"
 #include "notation.h"
 #include "neural/nn_policy.h"
+#include "tb.h"
 
 int scoreToCP(float score)
 {
@@ -45,7 +46,6 @@ Node::Node(Node *parent, const Game &game)
     m_rawQValue(-2.0f),
     m_pValue(-2.0f),
     m_uCoeff(-2.0f),
-    m_repetitions(-1),
     m_isExact(false),
     m_isPrefetch(false)
 {
@@ -58,25 +58,25 @@ Node::~Node()
     m_potentials.clear();
 }
 
-QVector<Game> Node::previousMoves() const
+QVector<Game> Node::previousMoves(bool fullHistory) const
 {
-    const int previousMoveCount = History::size();
+    const int previousMoveCount = 11;
     QVector<Game> result;
     Node *parent = m_parent;
 
     // Get our parents history
-    while (parent && result.count() < previousMoveCount) {
+    while (parent && (fullHistory || result.count() < previousMoveCount)) {
         result.prepend(parent->game());
         parent = parent->m_parent;
     }
 
     // Get history from the history list
-    if (result.count() < previousMoveCount) {
+    if (fullHistory || result.count() < previousMoveCount) {
         QVector<Game> h = History::globalInstance()->games();
         if (!h.isEmpty())
             h.takeLast(); // already captured current root
 
-        while (!h.isEmpty() && result.count() < previousMoveCount) {
+        while (!h.isEmpty() && (fullHistory || result.count() < previousMoveCount)) {
             Game g = h.takeLast();
             result.prepend(g);
         }
@@ -144,24 +144,24 @@ QString Node::principalVariation(int *depth, Strategy strategy) const
 
 int Node::repetitions() const
 {
-    if (m_repetitions != -1)
-        return m_repetitions;
-
-    // Need at least 3 ply for threefold and move number begins at 1
-    if (m_game.halfMoveNumber() < 10) {
-        m_repetitions = 0;
-        return m_repetitions;
-    }
+    if (m_game.repetitions() != -1)
+        return m_game.repetitions();
 
     qint8 r = 0;
-    const QVector<Game> previous = this->previousMoves();
+    const QVector<Game> previous = this->previousMoves(true /*fullHistory*/);
     QVector<Game>::const_reverse_iterator it = previous.crbegin();
     for (; it != previous.crend(); ++it) {
         if (m_game.isSamePosition(*it))
             ++r;
+
+        if (r >= 2)
+            break; // No sense in counting further
+
+        if (!(*it).halfMoveClock())
+            break;
     }
-    m_repetitions = r;
-    return m_repetitions;
+    const_cast<Node*>(this)->m_game.setRepetitions(r);
+    return m_game.repetitions();
 }
 
 bool Node::isThreeFold() const
@@ -274,10 +274,13 @@ public:
     }
 
     // Creates the node if necessary
-    Node *actualNode() const
+    Node *actualNode(bool *created) const
     {
-        if (isPotential())
+        if (isPotential()) {
+            *created = true;
             return m_parent->generateChild(m_potential);
+        }
+        *created = false;
         return m_node;
     }
 
@@ -308,7 +311,7 @@ int virtualLossDistance(float wec, const MCTSNode &a, const MCTSNode &b)
     return n;
 }
 
-Node *Node::playout(int *depth)
+Node *Node::playout(int *depth, bool *createdNode)
 {
     int tryPlayoutLimit = 256;
     int vldMax = 9999;
@@ -407,7 +410,13 @@ start_playout:
                 vld = qMin(vld, vldNew);
         }
 
-        n = firstNode.actualNode();
+        // Retrieve the actual first node
+        bool created = false;
+        n = firstNode.actualNode(&created);
+
+        // If we created any nodes, then update to indicate
+        if (created)
+            *createdNode = true;
     }
 
     *depth = d;
@@ -435,25 +444,43 @@ bool Node::hasNoisyChildren() const
     return false;
 }
 
-void Node::generatePotentials()
+bool Node::generatePotentials()
 {
     Q_ASSERT(!hasPotentials());
     if (hasPotentials())
-        return;
+        return false;
 
     // Check if this is drawn by rules
     if (Q_UNLIKELY(m_game.halfMoveClock() >= 100)) {
         m_rawQValue = 0.0f;
         m_isExact = true;
-        return;
+        return false;
     } else if (Q_UNLIKELY(m_game.isDeadPosition())) {
         m_rawQValue = 0.0f;
         m_isExact = true;
-        return;
+        return false;
     } else if (Q_UNLIKELY(isThreeFold())) {
         m_rawQValue = 0.0f;
         m_isExact = true;
-        return;
+        return false;
+    }
+
+    const TB::Probe result = isRootNode() ? TB::NotFound : TB::globalInstance()->probe(m_game);
+    switch (result) {
+    case TB::NotFound:
+        break;
+    case TB::Win:
+        m_rawQValue = 1.0f;
+        m_isExact = true;
+        return true;
+    case TB::Loss:
+        m_rawQValue = -1.0f;
+        m_isExact = true;
+        return true;
+    case TB::Draw:
+        m_rawQValue = 0.0f;
+        m_isExact = true;
+        return true;
     }
 
     // Otherwise try and generate potential moves
@@ -473,6 +500,7 @@ void Node::generatePotentials()
         }
         Q_ASSERT(isCheckMate() || isStaleMate());
     }
+    return false;
 }
 
 void Node::generatePotential(const Move &move)
@@ -506,7 +534,7 @@ QString Node::toString(Chess::NotationType notation) const
 {
     QString string;
     QTextStream stream(&string);
-    QVector<Game> games = previousMoves();
+    QVector<Game> games = previousMoves(false /*fullHistory*/);
     games << m_game;
     QVector<Game>::const_iterator it = games.begin();
     for (int i = 0; it != games.end(); ++it, ++i) {
@@ -559,7 +587,7 @@ QString Node::printTree(int depth) /*const*/
 
 QDebug operator<<(QDebug debug, const Node &node)
 {
-    QVector<Game> games = node.previousMoves();
+    QVector<Game> games = node.previousMoves(false /*fullHistory*/);
     games << node.game();
     debug.nospace() << "Node(\"";
     debug.noquote() << node.toString();

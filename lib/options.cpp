@@ -22,6 +22,7 @@
 
 #include "hash.h"
 #include "nn.h"
+#include "tb.h"
 
 class MyOptions : public Options { };
 Q_GLOBAL_STATIC(MyOptions, OptionsInstance)
@@ -42,10 +43,20 @@ Options::Options()
     hash.m_description = QLatin1String("Size of the hash in MB");
     insertOption(hash);
 
+    UciOption treeSize;
+    treeSize.m_name = QLatin1Literal("TreeSize");
+    treeSize.m_type = UciOption::Spin;
+    treeSize.m_default = QLatin1Literal("0");
+    treeSize.m_value = treeSize.m_default;
+    treeSize.m_min = QLatin1Literal("0");
+    treeSize.m_max = QLatin1Literal("65536");
+    treeSize.m_description = QLatin1String("Limit the size of the tree in MB");
+    insertOption(treeSize);
+
     UciOption moveOverhead;
     moveOverhead.m_name = QLatin1Literal("MoveOverhead");
     moveOverhead.m_type = UciOption::Spin;
-    moveOverhead.m_default = QLatin1Literal("100");
+    moveOverhead.m_default = QLatin1Literal("300");
     moveOverhead.m_value = moveOverhead.m_default;
     moveOverhead.m_min = QLatin1Literal("0");
     moveOverhead.m_max = QLatin1Literal("5000");
@@ -81,7 +92,7 @@ Options::Options()
     UciOption threads;
     threads.m_name = QLatin1Literal("Threads");
     threads.m_type = UciOption::Spin;
-    threads.m_default = QLatin1Literal("2");
+    threads.m_default = QLatin1Literal("1");
     threads.m_value = threads.m_default;
     threads.m_min = QLatin1Literal("0");
     threads.m_max = QLatin1Literal("256");
@@ -97,6 +108,14 @@ Options::Options()
     maxBatchSize.m_max = QLatin1Literal("65536");
     maxBatchSize.m_description = QLatin1String("Largest batch to send to GPU");
     insertOption(maxBatchSize);
+
+    UciOption tb;
+    tb.m_name = QLatin1Literal("SyzygyPath");
+    tb.m_type = UciOption::String;
+    tb.m_default = QLatin1Literal("");
+    tb.m_value = tb.m_default;
+    tb.m_description = QLatin1String("Path to the syzygy tablebase");
+    insertOption(tb);
 }
 
 Options::~Options()

@@ -24,6 +24,7 @@
 #include "hash.h"
 #include "movegen.h"
 #include "nn.h"
+#include "options.h"
 #include "testgames.h"
 #include "zobrist.h"
 
@@ -34,11 +35,7 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
     app.setApplicationName(APP_NAME);
 
-    // Order is important here
-    QString weightsPath = QCoreApplication::applicationDirPath() + QDir::separator() + "weights.pb";
-    NeuralNet::globalInstance()->setWeights(weightsPath);
-    Zobrist::globalInstance();
-    Movegen::globalInstance();
+    Options::globalInstance()->setOption("SyzygyPath", QCoreApplication::applicationDirPath() + QDir::separator() + "../../syzygy/");
 
     int rc = 0;
     TestGames test1;

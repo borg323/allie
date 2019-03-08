@@ -43,7 +43,7 @@ const int s_planeBase = s_planesPerPos * s_moveHistory;
 InputPlanes gameToInputPlanes(const Node *node)
 {
     Game game = node->game();
-    QVector<Game> games = node->previousMoves();
+    QVector<Game> games = node->previousMoves(false /*fullHistory*/);
     games << game; // add the current position
 
     int index = qMax(0, games.count() - s_moveHistory);
@@ -57,7 +57,6 @@ InputPlanes gameToInputPlanes(const Node *node)
     bool nextMoveIsBlack = game.activeArmy() == Black;
     Chess::Army us = nextMoveIsBlack ? Black : White;
     Chess::Army them = nextMoveIsBlack ? White : Black;
-    bool isRepetitious = node->repetitions() > 1;
 
     QVector<Game>::const_reverse_iterator it = games.crbegin();
     for (int i = 0; it != games.crend(); ++it, ++i) {
@@ -100,7 +99,7 @@ InputPlanes gameToInputPlanes(const Node *node)
         result[base + 10].mask = (theirs & queens).data();
         result[base + 11].mask = (theirs & kings).data();
         result[base + 11].mask = (theirs & kings).data();
-        if (isRepetitious)
+        if (g.repetitions() > 1)
             result[base + 12].SetAll();
     }
 
@@ -168,9 +167,8 @@ void NeuralNet::reset()
     }
 
     const int numberOfGPUCores = Options::globalInstance()->option("GPUCores").value().toInt();
-    const int numberOfThreads = Options::globalInstance()->option("Threads").value().toInt();
     const bool useFP16 = Options::globalInstance()->option("UseFP16").value() == "true";
-    if (numberOfGPUCores * numberOfThreads == m_availableNetworks.count()
+    if (numberOfGPUCores == m_availableNetworks.count()
         && useFP16 == m_usingFP16)
         return; // Nothing to do
 
@@ -178,8 +176,7 @@ void NeuralNet::reset()
     qDeleteAll(m_availableNetworks);
     m_availableNetworks.clear();
     for (int i = 0; i < numberOfGPUCores; ++i)
-        for (int j = 0; j < numberOfThreads; ++j)
-            m_availableNetworks.append(createNewNetwork(i, m_usingFP16));
+        m_availableNetworks.append(createNewNetwork(i, m_usingFP16));
 }
 
 void NeuralNet::setWeights(const QString &pathToWeights)
