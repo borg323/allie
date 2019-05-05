@@ -28,7 +28,7 @@
 #include "movegen.h"
 #include "node.h"
 #include "notation.h"
-#include "settings.h"
+#include "options.h"
 #include "zobrist.h"
 
 using namespace Chess;
@@ -377,50 +377,52 @@ void Game::setFen(const QString &fen)
 
     m_activeArmy = list.at(1) == QLatin1String("w") ? White : Black;
 
+    const bool isChess960 = Options::globalInstance()->option("UCI_Chess960").value() == QLatin1String("true");
+
     //Should work for regular fen and UCI fen for chess960...
     QString castling = list.at(2);
     if (castling != "-") {
         QVector<QChar> whiteKingSide;
         whiteKingSide << 'K';
-        if (Settings::globalInstance()->isChess960()) whiteKingSide << 'E' << 'F' << 'G' << 'H';
+        if (isChess960) whiteKingSide << 'E' << 'F' << 'G' << 'H';
         m_hasWhiteKingCastle = false;
         for (QChar c : whiteKingSide) {
             if (castling.contains(c)) {
                 m_hasWhiteKingCastle = true;
-                m_fileOfKingsRook = Settings::globalInstance()->isChess960() ? quint8(castling.indexOf(c)) + 3 : 7;
+                m_fileOfKingsRook = isChess960 ? quint8(whiteKingSide.indexOf(c)) + 3 : 7;
             }
         }
 
         QVector<QChar> whiteQueenSide;
         whiteQueenSide << 'Q';
-        if (Settings::globalInstance()->isChess960()) whiteQueenSide << 'A' << 'B' << 'C' << 'D';
+        if (isChess960) whiteQueenSide << 'A' << 'B' << 'C' << 'D';
         m_hasWhiteQueenCastle = false;
         for (QChar c : whiteQueenSide) {
             if (castling.contains(c)) {
                 m_hasWhiteQueenCastle = true;
-                m_fileOfQueensRook = Settings::globalInstance()->isChess960() ? quint8(castling.indexOf(c)) : 0;
+                m_fileOfQueensRook = isChess960 ? quint8(whiteQueenSide.indexOf(c) - 1) : 0;
             }
         }
 
         QVector<QChar> blackKingSide;
         blackKingSide << 'k';
-        if (Settings::globalInstance()->isChess960()) blackKingSide << 'e' << 'f' << 'g' << 'h';
+        if (isChess960) blackKingSide << 'e' << 'f' << 'g' << 'h';
         m_hasBlackKingCastle = false;
         for (QChar c : blackKingSide) {
             if (castling.contains(c)) {
                 m_hasBlackKingCastle = true;
-                m_fileOfKingsRook = Settings::globalInstance()->isChess960() ? quint8(castling.indexOf(c)) + 3 : 7;
+                m_fileOfKingsRook = isChess960 ? quint8(blackKingSide.indexOf(c)) + 3 : 7;
             }
         }
 
         QVector<QChar> blackQueenSide;
         blackQueenSide << 'q';
-        if (Settings::globalInstance()->isChess960()) blackQueenSide << 'a' << 'b' << 'c' << 'd';
+        if (isChess960) blackQueenSide << 'a' << 'b' << 'c' << 'd';
         m_hasBlackQueenCastle = false;
         for (QChar c : blackQueenSide) {
             if (castling.contains(c)) {
                 m_hasBlackQueenCastle = true;
-                m_fileOfQueensRook = Settings::globalInstance()->isChess960() ? quint8(castling.indexOf(c)) : 0;
+                m_fileOfQueensRook = isChess960 ? quint8(blackQueenSide.indexOf(c) - 1) : 0;
             }
         }
     }
@@ -483,15 +485,16 @@ QString Game::stateOfGameToFen(bool includeMoveNumbers) const
     QString ranks = rankList.join("/");
     QString activeArmy = (m_activeArmy == White ? QLatin1String("w") : QLatin1String("b"));
 
+    const bool isChess960 = Options::globalInstance()->option("UCI_Chess960").value() == QLatin1String("true");
     QString castling;
     if (isCastleAvailable(White, KingSide))
-        Settings::globalInstance()->isChess960() ? castling.append(Notation::fileToChar(m_fileOfKingsRook).toUpper()) : castling.append("K");
+        isChess960 ? castling.append(Notation::fileToChar(m_fileOfKingsRook).toUpper()) : castling.append("K");
     if (isCastleAvailable(White, QueenSide))
-        Settings::globalInstance()->isChess960() ? castling.append(Notation::fileToChar(m_fileOfQueensRook).toUpper()) : castling.append("Q");
+        isChess960 ? castling.append(Notation::fileToChar(m_fileOfQueensRook).toUpper()) : castling.append("Q");
     if (isCastleAvailable(Black, KingSide))
-        Settings::globalInstance()->isChess960() ? castling.append(Notation::fileToChar(m_fileOfKingsRook)) : castling.append("k");
+        isChess960 ? castling.append(Notation::fileToChar(m_fileOfKingsRook)) : castling.append("k");
     if (isCastleAvailable(Black, QueenSide))
-        Settings::globalInstance()->isChess960() ? castling.append(Notation::fileToChar(m_fileOfQueensRook)) : castling.append("q");
+        isChess960 ? castling.append(Notation::fileToChar(m_fileOfQueensRook)) : castling.append("q");
     if (castling.isEmpty())
         castling.append("-");
 
@@ -529,67 +532,80 @@ BitBoard Game::board(Chess::Army army, Chess::Castle castle, bool kingsSquares) 
     return castleBoard(army, castle, kingsSquares) & BitBoard(army == White ? firstRank : eighthRank);
 }
 
-BitBoard Game::attackBoard(Chess::PieceType piece, Chess::Army army) const
+BitBoard Game::kingAttackBoard(Chess::Army army, const Movegen *gen) const
 {
     BitBoard bits;
     const BitBoard friends = army == White ? m_whitePositionBoard : m_blackPositionBoard;
     const BitBoard enemies = army == Black ? m_whitePositionBoard : m_blackPositionBoard;
-    const Movegen *gen = Movegen::globalInstance();
-
-    if (piece == King) {
-        const BitBoard pieces(friends & board(King));
-        BitBoard::Iterator sq = pieces.begin();
-        for (int i = 0; sq != pieces.end(); ++sq, ++i) {
-            Q_ASSERT(i < 1);
-            bits = bits | gen->kingMoves(*sq, friends, enemies);
-        }
-        return bits;
+    const BitBoard pieces(friends & board(King));
+    BitBoard::Iterator sq = pieces.begin();
+    for (int i = 0; sq != pieces.end(); ++sq, ++i) {
+        Q_ASSERT(i < 1);
+        bits = bits | gen->kingMoves(*sq, friends, enemies);
     }
+    return bits;
+}
 
-    if (piece == Queen) {
-        const BitBoard pieces(friends & board(Queen));
-        BitBoard::Iterator sq = pieces.begin();
-        for (; sq != pieces.end(); ++sq)
-            bits = bits | gen->queenMoves(*sq, friends, enemies);
-        return bits;
-    }
+BitBoard Game::queenAttackBoard(Chess::Army army, const Movegen *gen) const
+{
+    BitBoard bits;
+    const BitBoard friends = army == White ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard enemies = army == Black ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard pieces(friends & board(Queen));
+    BitBoard::Iterator sq = pieces.begin();
+    for (; sq != pieces.end(); ++sq)
+        bits = bits | gen->queenMoves(*sq, friends, enemies);
+    return bits;
+}
 
-    if (piece == Rook) {
-        const BitBoard pieces(friends & board(Rook));
-        BitBoard::Iterator sq = pieces.begin();
-        for (; sq != pieces.end(); ++sq)
-            bits = bits | gen->rookMoves(*sq, friends, enemies);
-        return bits;
-    }
+BitBoard Game::rookAttackBoard(Chess::Army army, const Movegen *gen) const
+{
+    BitBoard bits;
+    const BitBoard friends = army == White ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard enemies = army == Black ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard pieces(friends & board(Rook));
+    BitBoard::Iterator sq = pieces.begin();
+    for (; sq != pieces.end(); ++sq)
+        bits = bits | gen->rookMoves(*sq, friends, enemies);
+    return bits;
+}
 
-    if (piece == Bishop) {
-        const BitBoard pieces(friends & board(Bishop));
-        BitBoard::Iterator sq = pieces.begin();
-        for (; sq != pieces.end(); ++sq)
-            bits = bits | gen->bishopMoves(*sq, friends, enemies);
-        return bits;
-    }
+BitBoard Game::bishopAttackBoard(Chess::Army army, const Movegen *gen) const
+{
+    BitBoard bits;
+    const BitBoard friends = army == White ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard enemies = army == Black ? m_whitePositionBoard : m_blackPositionBoard;
+            const BitBoard pieces(friends & board(Bishop));
+            BitBoard::Iterator sq = pieces.begin();
+            for (; sq != pieces.end(); ++sq)
+                bits = bits | gen->bishopMoves(*sq, friends, enemies);
+            return bits;
+}
 
-    if (piece == Knight) {
-        const BitBoard pieces(friends & board(Knight));
-        BitBoard::Iterator sq = pieces.begin();
-        for (; sq != pieces.end(); ++sq)
-            bits = bits | gen->knightMoves(*sq, friends, enemies);
-        return bits;
-    }
+BitBoard Game::knightAttackBoard(Chess::Army army, const Movegen *gen) const
+{
+    BitBoard bits;
+    const BitBoard friends = army == White ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard enemies = army == Black ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard pieces(friends & board(Knight));
+    BitBoard::Iterator sq = pieces.begin();
+    for (; sq != pieces.end(); ++sq)
+        bits = bits | gen->knightMoves(*sq, friends, enemies);
+    return bits;
+}
 
-    if (piece == Pawn) {
-        const BitBoard pieces(friends & board(Pawn));
-        BitBoard::Iterator sq = pieces.begin();
-        BitBoard enemiesPlusEnpassant = enemies;
-        if (m_enPassantTarget.isValid())
-            enemiesPlusEnpassant.setSquare(m_enPassantTarget);
-        for (; sq != pieces.end(); ++sq)
-            bits = bits | gen->pawnAttacks(army, *sq, friends, enemiesPlusEnpassant);
-        return bits;
-    }
-
-    Q_UNREACHABLE();
+BitBoard Game::pawnAttackBoard(Chess::Army army, const Movegen *gen) const
+{
+    BitBoard bits;
+    const BitBoard friends = army == White ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard enemies = army == Black ? m_whitePositionBoard : m_blackPositionBoard;
+    const BitBoard pieces(friends & board(Pawn));
+    BitBoard::Iterator sq = pieces.begin();
+    BitBoard enemiesPlusEnpassant = enemies;
+    if (m_enPassantTarget.isValid())
+        enemiesPlusEnpassant.setSquare(m_enPassantTarget);
+    for (; sq != pieces.end(); ++sq)
+        bits = bits | gen->pawnAttacks(army, *sq, friends, enemiesPlusEnpassant);
     return bits;
 }
 
@@ -738,29 +754,30 @@ bool Game::isChecked(Chess::Army army)
     const Chess::Army friends = army == White ? White : Black;
     const Chess::Army enemies = army == Black ? White : Black;
     const BitBoard kingBoard(board(friends) & board(King));
+    const Movegen *gen = Movegen::globalInstance();
     {
-        const BitBoard b(kingBoard & attackBoard(Queen, enemies));
+        const BitBoard b(kingBoard & queenAttackBoard(enemies, gen));
         if (!b.isClear()) {
             m_lastMove.setCheck(true);
             return true;
         }
     }
     {
-        const BitBoard b(kingBoard & attackBoard(Rook, enemies));
+        const BitBoard b(kingBoard & rookAttackBoard(enemies, gen));
         if (!b.isClear()) {
             m_lastMove.setCheck(true);
             return true;
         }
     }
     {
-        const BitBoard b(kingBoard & attackBoard(Bishop, enemies));
+        const BitBoard b(kingBoard & bishopAttackBoard(enemies, gen));
         if (!b.isClear()) {
             m_lastMove.setCheck(true);
             return true;
         }
     }
     {
-        const BitBoard b(kingBoard & attackBoard(Knight, enemies));
+        const BitBoard b(kingBoard & knightAttackBoard(enemies, gen));
         if (!b.isClear()) {
             m_lastMove.setCheck(true);
             return true;
@@ -768,14 +785,14 @@ bool Game::isChecked(Chess::Army army)
     }
     {
         // Checks for illegality...
-        const BitBoard b(kingBoard & attackBoard(King, enemies));
+        const BitBoard b(kingBoard & kingAttackBoard(enemies, gen));
         if (!b.isClear()) {
             m_lastMove.setCheck(true);
             return true;
         }
     }
     {
-        const BitBoard b(kingBoard & attackBoard(Pawn, enemies));
+        const BitBoard b(kingBoard & pawnAttackBoard(enemies, gen));
         if (!b.isClear()) {
             m_lastMove.setCheck(true);
             return true;
@@ -830,8 +847,17 @@ bool Game::isCastleLegal(Chess::Army army, Chess::Castle castle) const
     // The board representing the squares involved in castling for given army
     castleBoard = board(army, castle, true /*kingsSquares*/);
 
+    const Movegen *gen = Movegen::globalInstance();
+    const Chess::Army attackArmy = army == White ? Black : White;
+    const BitBoard atb = kingAttackBoard(attackArmy, gen) |
+        queenAttackBoard(attackArmy, gen) |
+        rookAttackBoard(attackArmy, gen) |
+        bishopAttackBoard(attackArmy, gen) |
+        knightAttackBoard(attackArmy, gen) |
+        pawnAttackBoard(attackArmy, gen);
+
     //Check if any squares between king and kings castle position are under attack...
-    if (!BitBoard(castleBoard & attackBoard(army == White ? Black : White)).isClear()) {
+    if (!BitBoard(castleBoard & atb).isClear()) {
         //qDebug() << "king can't move through check!";
         return false;
     }
@@ -893,6 +919,8 @@ bool Game::isSameGame(const Game &other) const
 
 bool Game::isSamePosition(const Game &other) const
 {
+    // FIXME: For purposes of 3-fold it does not matter if the queens rook and kings rook have
+    // swapped places, but it does matter for purposes of hash
     return m_activeArmy == other.m_activeArmy
         && m_fileOfKingsRook == other.m_fileOfKingsRook
         && m_fileOfQueensRook == other.m_fileOfQueensRook

@@ -27,11 +27,13 @@
 #include "bitboard.h"
 #include "chess.h"
 #include "game.h"
+#include "history.h"
 #include "neural/loader.h"
 #include "neural/nn_policy.h"
 #include "node.h"
 #include "notation.h"
 #include "options.h"
+#include "fastapprox/fastpow.h"
 
 using namespace Chess;
 using namespace lczero;
@@ -40,17 +42,54 @@ const int s_moveHistory = 8;
 const int s_planesPerPos = 13;
 const int s_planeBase = s_planesPerPos * s_moveHistory;
 
+void encodeGame(int i, const Game &g, InputPlanes *result, Chess::Army us, Chess::Army them,
+    bool nextMoveIsBlack)
+{
+    BitBoard ours = us == White ? g.board(White) : g.board(Black);
+    BitBoard theirs = them == White ? g.board(White) : g.board(Black);
+    BitBoard pawns = g.board(Pawn);
+    BitBoard knights = g.board(Knight);
+    BitBoard bishops = g.board(Bishop);
+    BitBoard rooks = g.board(Rook);
+    BitBoard queens = g.board(Queen);
+    BitBoard kings = g.board(King);
+
+    // If we are evaluating from black's perspective we need to flip the boards...
+    if (nextMoveIsBlack) {
+        ours.mirror();
+        theirs.mirror();
+        pawns.mirror();
+        knights.mirror();
+        bishops.mirror();
+        rooks.mirror();
+        queens.mirror();
+        kings.mirror();
+    }
+
+    const size_t base = size_t(i * s_planesPerPos);
+
+    (*result)[base + 0].mask = (ours & pawns).data();
+    (*result)[base + 1].mask = (ours & knights).data();
+    (*result)[base + 2].mask = (ours & bishops).data();
+    (*result)[base + 3].mask = (ours & rooks).data();
+    (*result)[base + 4].mask = (ours & queens).data();
+    (*result)[base + 5].mask = (ours & kings).data();
+
+    (*result)[base + 6].mask = (theirs & pawns).data();
+    (*result)[base + 7].mask = (theirs & knights).data();
+    (*result)[base + 8].mask = (theirs & bishops).data();
+    (*result)[base + 9].mask = (theirs & rooks).data();
+    (*result)[base + 10].mask = (theirs & queens).data();
+    (*result)[base + 11].mask = (theirs & kings).data();
+    if (g.repetitions() >= 1)
+        (*result)[base + 12].SetAll();
+
+    // FIXME: Encode enpassant target
+}
+
 InputPlanes gameToInputPlanes(const Node *node)
 {
     Game game = node->game();
-    QVector<Game> games = node->previousMoves(false /*fullHistory*/);
-    games << game; // add the current position
-
-    int index = qMax(0, games.count() - s_moveHistory);
-    games = games.mid(index);
-    Q_ASSERT(!games.isEmpty());
-    Q_ASSERT(games.count() <= s_moveHistory);
-
     InputPlanes result(s_planeBase + s_moveHistory);
 
     // *us* refers to the perspective of whoever is next to move
@@ -58,66 +97,27 @@ InputPlanes gameToInputPlanes(const Node *node)
     Chess::Army us = nextMoveIsBlack ? Black : White;
     Chess::Army them = nextMoveIsBlack ? White : Black;
 
-    QVector<Game>::const_reverse_iterator it = games.crbegin();
-    for (int i = 0; it != games.crend(); ++it, ++i) {
-
-        Game g = *it;
-        BitBoard ours = us == White ? g.board(White) : g.board(Black);
-        BitBoard theirs = them == White ? g.board(White) : g.board(Black);
-        BitBoard pawns = g.board(Pawn);
-        BitBoard knights = g.board(Knight);
-        BitBoard bishops = g.board(Bishop);
-        BitBoard rooks = g.board(Rook);
-        BitBoard queens = g.board(Queen);
-        BitBoard kings = g.board(King);
-
-        // If we are evaluating from black's perspective we need to flip the boards...
-        if (nextMoveIsBlack) {
-            ours.mirror();
-            theirs.mirror();
-            pawns.mirror();
-            knights.mirror();
-            bishops.mirror();
-            rooks.mirror();
-            queens.mirror();
-            kings.mirror();
-        }
-
-        const size_t base = size_t(i * s_planesPerPos);
-
-        result[base + 0].mask = (ours & pawns).data();
-        result[base + 1].mask = (ours & knights).data();
-        result[base + 2].mask = (ours & bishops).data();
-        result[base + 3].mask = (ours & rooks).data();
-        result[base + 4].mask = (ours & queens).data();
-        result[base + 5].mask = (ours & kings).data();
-
-        result[base + 6].mask = (theirs & pawns).data();
-        result[base + 7].mask = (theirs & knights).data();
-        result[base + 8].mask = (theirs & bishops).data();
-        result[base + 9].mask = (theirs & rooks).data();
-        result[base + 10].mask = (theirs & queens).data();
-        result[base + 11].mask = (theirs & kings).data();
-        result[base + 11].mask = (theirs & kings).data();
-        if (g.repetitions() > 1)
-            result[base + 12].SetAll();
+    HistoryIterator it = HistoryIterator::begin(node);
+    int gamesEncoded = 0;
+    Game lastGameEncoded = game;
+    for (; it != HistoryIterator::end() && gamesEncoded < s_moveHistory; ++it, ++gamesEncoded) {
+        encodeGame(gamesEncoded, *it, &result, us, them, nextMoveIsBlack);
+        lastGameEncoded = *it;
     }
 
-#if 0
-    {
-        QVector<Move> moves;
-        QVector<Game>::const_iterator it = games.begin();
-        for (; it != games.end(); ++it) {
-            moves << (*it).lastMove();
+    // Add fake history by repeating the position to fill it up as long as the last position in the
+    // real history is not the startpos
+    if (lastGameEncoded != Game()) {
+        while (gamesEncoded < s_moveHistory) {
+            encodeGame(gamesEncoded, lastGameEncoded, &result, us, them, nextMoveIsBlack);
+            ++gamesEncoded;
         }
-        qDebug() << "generating eval for" << moves;
     }
-#endif
 
     if (game.isCastleAvailable(us, QueenSide)) result[s_planeBase + 0].SetAll();
     if (game.isCastleAvailable(us, KingSide)) result[s_planeBase + 1].SetAll();
     if (game.isCastleAvailable(them, QueenSide)) result[s_planeBase + 2].SetAll();
-    if (game.isCastleAvailable(them, QueenSide)) result[s_planeBase + 3].SetAll();
+    if (game.isCastleAvailable(them, KingSide)) result[s_planeBase + 3].SetAll();
     if (us == Chess::Black) result[s_planeBase + 4].SetAll();
     result[s_planeBase + 5].Fill(game.halfMoveClock());
     // Plane s_planeBase + 6 used to be movecount plane, now it's all zeros.
@@ -263,19 +263,26 @@ float Computation::qVal(int index) const
 void Computation::setPVals(int index, Node *node) const
 {
     Q_ASSERT(index < m_positions);
-    const float kPolicySoftmaxTemp = 2.2f; // default of lc0
     Q_ASSERT(node->hasPotentials());
     QVector<PotentialNode*> potentials = node->potentials();
-    QMultiHash<float, PotentialNode*> policyValues;
+    QVector<QPair<float, PotentialNode*>> policyValues;
+    policyValues.reserve(potentials.size());
     float total = 0;
     for (PotentialNode *n : potentials) {
         Move mv = n->move();
         if (node->game().activeArmy() == Chess::Black)
             mv.mirror(); // nn index expects the board to be flipped
-        float p = powf(m_computation->GetPVal(index, moveToNNIndex(mv)), 1 / kPolicySoftmaxTemp);
+        const float p = fastpow(m_computation->GetPVal(index, moveToNNIndex(mv)), SearchSettings::policySoftmaxTemp);
         total += p;
-        policyValues.insert(p, n);
+        policyValues.append(qMakePair(p, n));
     }
 
-    return normalizeNNPolicies(policyValues, total);
+    QVector<QPair<float, PotentialNode*>>::const_iterator it = policyValues.begin();
+    const float scale = 1.0f / total;
+    float normalizedTotal = 0;
+    for (; it != policyValues.end(); ++it) {
+        float normalizedP = scale * it->first;
+        it->second->setPValue(normalizedP);
+        normalizedTotal += normalizedP;
+    }
 }

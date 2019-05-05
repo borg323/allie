@@ -14,6 +14,11 @@ lessThan(QT_MINOR_VERSION, 9) {
     error("Requres at least at least Qt 5.9")
 }
 
+!win32 {
+    QMAKE_CXXFLAGS += -march=native -ffast-math
+    DEFINES += USE_PEXT
+}
+
 DEFINES += TB_NO_HELPER_API
 
 include(atomic.pri)
@@ -42,7 +47,6 @@ HEADERS += \
     $$PWD/piece.h \
     $$PWD/search.h \
     $$PWD/searchengine.h \
-    $$PWD/settings.h \
     $$PWD/square.h \
     $$PWD/tb.h \
     $$PWD/treeiterator.h \
@@ -79,7 +83,6 @@ SOURCES += \
     $$PWD/piece.cpp \
     $$PWD/search.cpp \
     $$PWD/searchengine.cpp \
-    $$PWD/settings.cpp \
     $$PWD/square.cpp \
     $$PWD/tb.cpp \
     $$PWD/uciengine.cpp \

@@ -26,6 +26,7 @@
 #include "nn.h"
 #include "node.h"
 #include "notation.h"
+#include "options.h"
 #include "searchengine.h"
 #include "testgames.h"
 #include "treeiterator.h"
@@ -155,6 +156,15 @@ void TestGames::testStartingPositionBlack()
     qDeleteAll(gc);
 }
 
+void TestGames::test960()
+{
+    Options::globalInstance()->setOption("UCI_Chess960", QLatin1Literal("true"));
+    Game g("qrknbbrn/pppppppp/8/8/8/8/PPPPPPPP/QRKNBBRN w GBgb - 0 1");
+    QCOMPARE(g.stateOfGameToFen(), QLatin1String("qrknbbrn/pppppppp/8/8/8/8/PPPPPPPP/QRKNBBRN w GBgb - 0 1"));
+    QCOMPARE(g.activeArmy(), Chess::White);
+    Options::globalInstance()->setOption("UCI_Chess960", QLatin1Literal("false"));
+}
+
 void TestGames::testSearchForMateInOne()
 {
     const QLatin1String mateInOne = QLatin1String("8/8/5K2/3P3k/2P5/8/6Q1/8 w - - 12 68");
@@ -168,8 +178,8 @@ void TestGames::testSearchForMateInOne()
 
     QSignalSpy bestMoveSpy(&handler, &UCIIOHandler::receivedBestMove);
     engine.readyRead(mateInOneMoves);
-    engine.readyRead(QLatin1String("go depth 2"));
-    bool receivedSignal = bestMoveSpy.wait();
+    engine.readyRead(QLatin1String("go depth 1"));
+    const bool receivedSignal = bestMoveSpy.isEmpty() ? bestMoveSpy.wait() : true;
     if (!receivedSignal) {
         QString message = QString("Did not receive signal for %1").arg(mateInOneMoves);
         QWARN(message.toLatin1().constData());
@@ -179,7 +189,81 @@ void TestGames::testSearchForMateInOne()
     QVERIFY2(handler.lastBestMove() == QLatin1String("g2h3")
         || handler.lastBestMove() == QLatin1String("g2g5"), QString("Result is %1")
         .arg(handler.lastBestMove()).toLatin1().constData());
-    QCOMPARE(handler.lastInfo().score, QLatin1String("mate 1"));
+    QVERIFY(handler.lastInfo().score == QLatin1String("mate 1")
+        || handler.lastInfo().score == QLatin1String("cp 11115"));
+}
+
+void TestGames::testInstaMove()
+{
+    const QLatin1String oneLegalMove = QLatin1String("position fen rnbqk2r/pppp1p1p/4pn1p/8/1bPP4/N7/PP2PPPP/R2QKBNR w KQkq - 3 5");
+    UciEngine engine(this, QString());
+    UCIIOHandler handler(this);
+    engine.installIOHandler(&handler);
+
+    QSignalSpy bestMoveSpy(&handler, &UCIIOHandler::receivedBestMove);
+    engine.readyRead(oneLegalMove);
+    engine.readyRead(QLatin1String("go wtime 1000000 btime 1000000"));
+    const bool receivedSignal = bestMoveSpy.isEmpty() ? bestMoveSpy.wait(1000000) : true;
+    if (!receivedSignal) {
+        QString message = QString("Did not receive signal for %1").arg(oneLegalMove);
+        QWARN(message.toLatin1().constData());
+        engine.readyRead(QLatin1String("stop"));
+    }
+    QVERIFY(receivedSignal);
+    QVERIFY2(handler.lastBestMove() == QLatin1String("d1d2"), QString("Result is %1")
+        .arg(handler.lastBestMove()).toLatin1().constData());
+}
+
+void TestGames::testHistory()
+{
+    QLatin1String fen = QLatin1String("4k3/8/8/8/8/1R6/8/4K3 b - - 0 40");
+    QVector<QString> moves = QString("e8d7 e1f1 d7d6 b3b2 d6c6 b2b8 c6d6 b8b7 d6c6 b7b3 c6d7 b3a3 d7c7 a3a6 c7c8").split(" ").toVector();
+
+    History::globalInstance()->clear();
+
+    Game game(fen);
+    for (QString move : moves) {
+        Move mv = Notation::stringToMove(move, Chess::Computer);
+        bool success = game.makeMove(mv);
+        History::globalInstance()->addGame(game);
+        QVERIFY(success);
+    }
+
+    Game g = History::globalInstance()->currentGame();
+    Node *root = new Node(nullptr, g);
+
+    Node *lastNode = root;
+    QVector<QString> nodeMoves = QString("a6a1 c8d7 f1g1 d7c6 a1a8 c6b7 a8d8 b7a7").split(" ").toVector();
+    for (QString move : nodeMoves) {
+        Move mv = Notation::stringToMove(move, Chess::Computer);
+        bool success = game.makeMove(mv);
+        QVERIFY(success);
+        Node *n = new Node(lastNode, game);
+        lastNode = n;
+    }
+
+    QString string;
+    {
+        QTextStream stream(&string);
+        HistoryIterator it = HistoryIterator::begin(lastNode);
+        for (; it != HistoryIterator::end(); ++it) {
+            stream << (*it).toString(Chess::Computer);
+            stream << QLatin1String(" ");
+        }
+        string = string.trimmed();
+    }
+
+    // The moves in reverse order...
+    QCOMPARE(string, QLatin1String("b7a7 a8d8 c6b7 a1a8 d7c6 f1g1 c8d7 a6a1 c7c8 a3a6 d7c7 b3a3 c6d7 b7b3 d6c6 b8b7 c6d6 b2b8 d6c6 b3b2 d7d6 e1f1 e8d7"));
+
+    // The toString method is slower, but uses history here to display the last 12 moves from the node
+    QCOMPARE(lastNode->toString(), QLatin1String("b3a3 d7c7 a3a6 c7c8 a6a1 c8d7 f1g1 d7c6 a1a8 c6b7 a8d8 b7a7"));
+
+    QVector<Node*> gc;
+    TreeIterator<PreOrder> it = root->begin<PreOrder>();
+    for (; it != root->end<PreOrder>(); ++it)
+        gc.append(*it);
+    qDeleteAll(gc);
 }
 
 void TestGames::testThreeFold()
@@ -317,8 +401,9 @@ void TestGames::checkGame(const QString &fen, const QVector<QString> &mv)
         }
 
         engineHandler.clear();
-        engine.readyRead(QLatin1String("go wtime 2000 btime 100"));
-        bool receivedSignal = bestMoveSpy.wait();
+        bestMoveSpy.clear();
+        engine.readyRead(QLatin1String("go depth 1"));
+        const bool receivedSignal = bestMoveSpy.isEmpty() ? bestMoveSpy.wait() : true;
         if (!receivedSignal) {
             QString message = QString("Did not receive signal for %1").arg(position);
             QWARN(message.toLatin1().constData());
@@ -391,6 +476,16 @@ void TestGames::testMateWithKQQvK()
     QVector<QString> moves;
     moves.append(QLatin1String("e8d7"));
     checkGame(fen, moves);
+}
+
+void TestGames::testTB()
+{
+    // TB positions tested manually
+    // 8/8/1K6/2P2Q1p/P6k/1pq5/2P5/8 w - - 2 88
+    QVERIFY(true);
+
+    // 2K5/8/2P3q1/8/P4k2/7Q/8/8 w - - 3 110
+    QVERIFY(true);
 }
 
 void TestGames::testHashInsertAndRetrieve()

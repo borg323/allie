@@ -41,11 +41,8 @@
 #include "searchengine.h"
 #include "tb.h"
 
-#define LOG
 //#define AVERAGES
-#if defined(LOG)
 static bool s_firstLog = true;
-#endif
 
 //#define DEBUG_TIME
 
@@ -161,23 +158,24 @@ void g_uciMessageHandler(QtMsgType type, const QMessageLogContext &context, cons
         fprintf(stderr, "%s", format.toLatin1().constData());
     }
 
-#if defined(LOG)
-    QString logFilePath = QCoreApplication::applicationDirPath() +
-        QDir::separator() + QCoreApplication::applicationName() +
-        "_debug.log";
-    QFile file(logFilePath);
+    const bool debugLog = Options::globalInstance()->option("DebugLog").value() == "true";
+    if (debugLog) {
+        QString logFilePath = QCoreApplication::applicationDirPath() +
+            QDir::separator() + QCoreApplication::applicationName() +
+            "_debug.log";
+        QFile file(logFilePath);
 
-    QIODevice::OpenMode mode = QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append;
-    if (!file.open(mode))
-        return;
+        QIODevice::OpenMode mode = QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append;
+        if (!file.open(mode))
+            return;
 
-    QTextStream log(&file);
-    if (s_firstLog)
-        log << "Output: log pid " << QCoreApplication::applicationPid() << " at "
-            << QDateTime::currentDateTime().toString() << "\n";
-    log << format;
-    s_firstLog = false;
-#endif
+        QTextStream log(&file);
+        if (s_firstLog)
+            log << "Output: log pid " << QCoreApplication::applicationPid() << " at "
+                << QDateTime::currentDateTime().toString() << "\n";
+        log << format;
+        s_firstLog = false;
+    }
 }
 
 IOWorker::IOWorker(const QString &debugFile, QObject *parent)
@@ -197,23 +195,37 @@ IOWorker::IOWorker(const QString &debugFile, QObject *parent)
 
 void IOWorker::startDebug()
 {
+    if (m_debugLines.isEmpty())
+        readyRead();
+
+    QVector<QString> input;
+
+    // Either we are out of lines or first line should be input
+    bool isInputMode = m_debugLines.isEmpty() || m_debugLines.first().startsWith(QLatin1String("Input: "));
     while (!m_debugLines.isEmpty()) {
+        QString peek = m_debugLines.first();
+        if (!isInputMode && !input.isEmpty() && peek.startsWith(QLatin1String("Input: ")))
+            break;
+
         QString line = m_debugLines.dequeue();
-        if (line == "Input:" && !m_debugLines.isEmpty()) {
-            QString input = m_debugLines.dequeue();
-            QString lastLine;
-            QQueue<QString>::const_iterator it = m_debugLines.begin();
-            for (; it != m_debugLines.end(); ++it) {
-                if (*it == "Input:")
-                    break;
-                lastLine = *it;
-            }
-            m_waitingOnOutput = lastLine;
-            fprintf(stderr, "%s\n", input.toLatin1().constData());
-            emit standardInput(input);
-            if (!m_waitingOnOutput.isEmpty())
-                return;
+        if (line.startsWith(QLatin1String("Output: "))) {
+            line.remove(0, 8);
+            isInputMode = false;
+        } else if (line.startsWith(QLatin1String("Input: "))) {
+            line.remove(0, 7);
+            isInputMode = true;
         }
+
+        if (isInputMode)
+            input.append(line);
+        else
+            m_waitingOnOutput = line;
+    }
+
+
+    for (QString line : input) {
+        fprintf(stderr, "%s\n", line.toLatin1().constData());
+        emit standardInput(line);
     }
 }
 
@@ -253,11 +265,13 @@ UciEngine::UciEngine(QObject *parent, const QString &debugFile)
     m_searchEngine(nullptr),
     m_timeAtLastProgress(0),
     m_depthTargeted(-1),
+    m_nodesTargeted(-1),
     m_clock(new Clock(this)),
     m_ioHandler(nullptr)
 {
     m_searchEngine = new SearchEngine(this);
     connect(m_searchEngine, &SearchEngine::sendInfo, this, &UciEngine::sendInfo);
+    connect(m_searchEngine, &SearchEngine::requestStop, this, &UciEngine::stop);
     connect(m_clock, &Clock::timeout, this, [&](){ sendBestMove(false /*force*/); });
 }
 
@@ -422,8 +436,8 @@ void UciEngine::calculateRollingAverage(const SearchInfo &info)
     const WorkerInfo &newW = info.workerInfo;
     avgW.nodesSearched     = rollingAverage(avgW.nodesSearched, newW.nodesSearched, n);
     avgW.nodesEvaluated    = rollingAverage(avgW.nodesEvaluated, newW.nodesEvaluated, n);
-    avgW.nodesCreated    = rollingAverage(avgW.nodesCreated, newW.nodesCreated, n);
-    avgW.nodesTBHits    = rollingAverage(avgW.nodesTBHits, newW.nodesTBHits, n);
+    avgW.nodesCreated      = rollingAverage(avgW.nodesCreated, newW.nodesCreated, n);
+    avgW.nodesTBHits       = rollingAverage(avgW.nodesTBHits, newW.nodesTBHits, n);
     avgW.nodesCacheHits    = rollingAverage(avgW.nodesCacheHits, newW.nodesCacheHits, n);
 }
 
@@ -493,7 +507,11 @@ void UciEngine::sendInfo(const SearchInfo &info, bool isPartial)
     m_lastInfo.time = msecs;
     m_clock->updateDeadline(m_lastInfo, isPartial);
 
-    if (isPartial && (msecs - m_timeAtLastProgress) < 2500)
+    const bool targetReached = (m_depthTargeted != -1 && m_lastInfo.depth >= m_depthTargeted)
+        || (m_nodesTargeted != -1 && m_lastInfo.nodes >= m_nodesTargeted)
+        || info.isDTZ;
+
+    if (!targetReached && (isPartial && (msecs - m_timeAtLastProgress) < 2500))
         return;
 
     m_timeAtLastProgress = msecs;
@@ -549,8 +567,8 @@ void UciEngine::sendInfo(const SearchInfo &info, bool isPartial)
 
     output(out);
 
-    // Stop at specific depth if requested
-    if (m_depthTargeted != -1 && m_lastInfo.depth >= m_depthTargeted)
+    // Stop at specific targets if requested or if we have a dtz move
+    if (targetReached)
         sendBestMove(true /*force*/);
 }
 
@@ -655,7 +673,7 @@ int getNextIntAfterSearch(const QList<QString> strings, QString search)
     int result = -1;
     int index = -1;
     if ((index = strings.indexOf(search)) != -1) {
-        if (index++ < strings.count()) {
+        if (++index < strings.count()) {
             bool ok;
             int num = strings.at(index).toInt(&ok);
             if (ok)
@@ -742,6 +760,7 @@ void UciEngine::go(const Search& s)
     m_clock->startDeadline(s.game.activeArmy());
     m_timeAtLastProgress = 0;
     m_depthTargeted = s.depth;
+    m_nodesTargeted = s.nodes;
     m_lastInfo = SearchInfo();
 
     startSearch(s);

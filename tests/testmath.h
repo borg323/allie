@@ -18,21 +18,11 @@
   Additional permission under GNU GPL version 3 section 7
 */
 
-#ifndef SETTINGS_H
-#define SETTINGS_H
+#include <QtTest/QtTest>
 
-class Settings {
-public:
-    static Settings *globalInstance();
-
-    bool isChess960() const { return m_isChess960; }
-    void setChess960(bool chess960) { m_isChess960 = chess960; }
-
-private:
-    Settings();
-
-    bool m_isChess960;
-    friend class MySettings;
+class TestMath: public QObject {
+    Q_OBJECT
+private slots:
+    void testFastLog();
+    void testFastPow();
 };
-
-#endif

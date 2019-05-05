@@ -136,22 +136,21 @@ bool fillOutNodeFromEntry(Node *node, const HashEntry &entry)
     Q_ASSERT(!qFuzzyCompare(entry.qValue, -2.0f));
     Q_ASSERT(!node->hasRawQValue());
     node->setRawQValue(entry.qValue);
+    Q_ASSERT(node->hasRawQValue());
     Q_ASSERT((node->hasPotentials()) || node->isCheckMate() || node->isStaleMate());
     if (!node->hasPotentials())
         return true;
 
-    QHash<qint32, float> pVals;
-    for (int i = 0; i < MAX_POTENTIALS_COUNT; ++i) {
-        HashPValue pVal = pValueFromHash(entry.potentialValues[i]);
-        if (pVal.index != -1)
-            pVals.insert(pVal.index, pVal.pValue);
-    }
-    Q_ASSERT(!pVals.isEmpty());
-    for (PotentialNode *potential : node->potentials()) {
+    const QVector<PotentialNode*> potentials = node->potentials();
+    for (int i = 0; i < potentials.count(); ++i) {
+        PotentialNode *potential = potentials.at(i);
+        Q_ASSERT(potential);
         Q_ASSERT(!potential->hasPValue());
-        const float pValue = pVals.value(moveToNNIndex(potential->move()));
+        HashPValue pVal = pValueFromHash(entry.potentialValues[i]);
+        Q_ASSERT(pVal.index == moveToNNIndex(potential->move()));
+        const float pValue = pVal.pValue;
         Q_ASSERT(!qFuzzyCompare(pValue, -2.0f));
-        potential->setPValue(pValue);
+        potential->setPValue(pVal.pValue);
     }
 
     return true;
@@ -159,10 +158,10 @@ bool fillOutNodeFromEntry(Node *node, const HashEntry &entry)
 
 bool Hash::fillOut(Node *node) const
 {
-    Q_ASSERT(m_cache);
-    if (!m_cache)
+    if (!m_cache || !m_cache->maxCost())
         return false;
 
+    Q_ASSERT(m_cache);
     HashEntry *entry = m_cache->object(node->game().hash());
     if (!entry)
         return false;

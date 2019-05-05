@@ -26,19 +26,22 @@
 #include <QtMath>
 #include <QMutex>
 
+#include "fastapprox/fastlog.h"
 #include "game.h"
 #include "move.h"
+#include "notation.h"
+#include "search.h"
 #include "treeutils.h"
 
 #define MAX_DEPTH 127
-//#define USE_PARENT_QVALUE
+#define USE_PARENT_QVALUE
+#define USE_CPUCT_SCALING
 
 //#define DEBUG_FETCHANDBP
 //#define DEBUG_PLAYOUT_MCTS
 
 extern int scoreToCP(float score);
 extern float cpToScore(int cp);
-static const float s_kpuct = 3.4f;
 
 template<Traversal>
 class TreeIterator;
@@ -62,6 +65,11 @@ public:
     void setPValue(float pValue) { m_pValue = pValue; }
     Move move() const { return m_move; }
 
+    QString toString() const
+    {
+        return Notation::moveToString(m_move, Chess::Computer);
+    }
+
 private:
     Move m_move;
     float m_pValue;
@@ -69,16 +77,12 @@ private:
 
 class Node {
 public:
-    enum Strategy {
-        MCTS
-    };
-
     Node(Node *parent, const Game &game);
     ~Node();
 
     Game game() const { return m_game; }
 
-    QVector<Game> previousMoves(bool fullHistory) const;
+    QVector<Game> previousMoves(bool fullHistory) const; // slow
 
     template<Traversal t>
     TreeIterator<t> begin() { return TreeIterator<t>(this); }
@@ -89,7 +93,7 @@ public:
     bool isSecondChild() const;
 
     int depth() const;
-    int treeDepth(Strategy strategy);
+    int treeDepth() const;
     bool isExact() const;
     float uCoeff() const;
     float uValue() const;
@@ -114,9 +118,9 @@ public:
     Node *leftMostChild() const;
     Node *nextSibling() const;
     Node *nextAncestorSibling() const;
-    Node *bestChild(Strategy strategy) const;
+    Node *bestChild() const;
 
-    QString principalVariation(int *depth, Strategy strategy) const; // recursive
+    QString principalVariation(int *depth) const; // recursive
 
     bool hasQValue() const;
     float qValueDefault() const;
@@ -138,15 +142,12 @@ public:
     int count() const;
 
     void incrementVisited();
-    static bool greaterThan(const Node *a, const Node *b, Strategy strategy);
-    static void sortByScore(QVector<Node*> &nodes, bool partialSortFirstOnly,
-        Strategy strategy);
+    static bool greaterThan(const Node *a, const Node *b);
+    static void sortByScore(QVector<Node*> &nodes, bool partialSortFirstOnlyy);
 
     QString toString(Chess::NotationType = Chess::Computer) const;
     QString printTree(int depth) /*const*/; // recursive
 
-    bool isPrefetch() const { return m_isPrefetch; }
-    void setPrefetch(bool p) { m_isPrefetch = p; }
     bool isCheckMate() const { return m_game.lastMove().isCheckMate(); }
     bool isStaleMate() const { return m_game.lastMove().isStaleMate(); }
     int repetitions() const;
@@ -155,7 +156,8 @@ public:
 
     // children and potential generation
     bool hasNoisyChildren() const;
-    bool generatePotentials();
+    bool checkAndGenerateDTZ(int *dtz);
+    void generatePotentials();
     void generatePotential(const Move &move);
     Node *generateChild(PotentialNode *potential);
 
@@ -175,9 +177,10 @@ private:
     float m_qValue;
     float m_rawQValue;
     float m_pValue;
+    float m_policySum;
     mutable float m_uCoeff;
     bool m_isExact: 1;
-    bool m_isPrefetch: 1;
+    bool m_isTB: 1;
     std::atomic_flag m_scoringOrScored;
     template<Traversal t>
     friend class TreeIterator;
@@ -203,13 +206,13 @@ inline int Node::depth() const
     return d;
 }
 
-inline int Node::treeDepth(Strategy strategy)
+inline int Node::treeDepth() const
 {
     int d = 0;
-    Node *n = this;
+    const Node *n = this;
     while (n && n->hasChildren()) {
         QVector<Node*> children = n->m_children;
-        sortByScore(children, true /*partialSortFirstOnly*/, strategy);
+        sortByScore(children, true /*partialSortFirstOnly*/);
         n = children.first();
         ++d;
     }
@@ -254,12 +257,12 @@ inline Node *Node::leftChild() const
     return m_children.first();
 }
 
-inline Node *Node::bestChild(Strategy strategy) const
+inline Node *Node::bestChild() const
 {
     if (!hasChildren())
         return nullptr;
     QVector<Node*> children = m_children;
-    sortByScore(children, true /*partialSortFirstOnly*/, strategy);
+    sortByScore(children, true /*partialSortFirstOnly*/);
     return children.first();
 }
 
@@ -301,7 +304,7 @@ inline Node *Node::nextAncestorSibling() const
 inline float Node::qValueDefault() const
 {
 #if defined(USE_PARENT_QVALUE)
-    return -qValue();
+    return -qValue() - SearchSettings::fpuReduction * float(qSqrt(qreal(m_policySum)));
 #else
     return -1.0f;
 #endif
@@ -311,6 +314,9 @@ inline float Node::qValue() const
 {
     if (isRootNode() || m_visited > 0)
         return m_qValue;
+
+    if (m_parent->isRootNode())
+        return 1.0f;
     return m_parent->qValueDefault();
 }
 
@@ -318,7 +324,14 @@ inline float Node::uCoeff() const
 {
     if (qFuzzyCompare(m_uCoeff, -2.0f)) {
         const quint32 N = qMax(quint32(1), m_visited);
-        m_uCoeff = s_kpuct * float(qSqrt(N));
+#if defined(USE_CPUCT_SCALING)
+        // From Deepmind's A0 paper
+        // log ((1 + N(s) + cbase)/cbase) + cini
+        const float growth = SearchSettings::cpuctF * fastlog((1 + N + SearchSettings::cpuctBase) / SearchSettings::cpuctBase);
+#else
+        const float growth = 0.0f;
+#endif
+        m_uCoeff = (SearchSettings::cpuctInit + growth) * float(qSqrt(N));
     }
     return m_uCoeff;
 }
@@ -341,9 +354,8 @@ inline float Node::weightedExplorationScore() const
     return q + uValue();
 }
 
-inline bool Node::greaterThan(const Node *a, const Node *b, Strategy s)
+inline bool Node::greaterThan(const Node *a, const Node *b)
 {
-    Q_UNUSED(s);
     if (a->m_visited == b->m_visited) {
         if (!a->m_visited)
             return a->pValue() > b->pValue();
@@ -353,18 +365,17 @@ inline bool Node::greaterThan(const Node *a, const Node *b, Strategy s)
     return a->m_visited > b->m_visited;
 }
 
-inline void Node::sortByScore(QVector<Node*> &nodes, bool partialSortFirstOnly,
-    Strategy strategy)
+inline void Node::sortByScore(QVector<Node*> &nodes, bool partialSortFirstOnly)
 {
     if (Q_LIKELY(partialSortFirstOnly)) {
         std::partial_sort(nodes.begin(), nodes.begin() + 1, nodes.end(),
             [=](const Node *a, const Node *b) {
-            return greaterThan(a, b, strategy);
+            return greaterThan(a, b);
         });
     } else {
         std::stable_sort(nodes.begin(), nodes.end(),
             [=](const Node *a, const Node *b) {
-            return greaterThan(a, b, strategy);
+            return greaterThan(a, b);
         });
     }
 }

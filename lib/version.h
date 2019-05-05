@@ -18,18 +18,26 @@
   Additional permission under GNU GPL version 3 section 7
 */
 
-#include "settings.h"
+#ifndef VERSION_H
+#define VERSION_H
 
-#include <QGlobalStatic>
+#include <QString>
 
-class MySettings : public Settings { };
-Q_GLOBAL_STATIC(MySettings, settingsInstance)
-Settings *Settings::globalInstance()
+static int s_majorVersion = 0;
+static int s_minorVersion = 4;
+static bool s_isDev = true;
+
+static QString versionString()
 {
-    return settingsInstance();
+    const QString maj = QString::number(s_majorVersion);
+    const QString min = QString::number(s_minorVersion);
+#if defined(GIT_SHA)
+    const QString git = QString("(%0)").arg(GIT_SHA);
+#else
+    const QString git = QString();
+#endif
+    const QString dev = s_isDev ? QLatin1String("-dev") : QLatin1String("");
+    return QString("v%0.%1%2 %3").arg(maj).arg(min).arg(dev).arg(git);
 }
 
-Settings::Settings()
-    : m_isChess960(false)
-{
-}
+#endif // VERSION_H

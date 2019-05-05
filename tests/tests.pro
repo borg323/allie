@@ -7,6 +7,8 @@ QT += testlib
 QT -= gui network
 CONFIG += c++14 console
 
+include($$PWD/../lib/git.pri)
+
 CONFIG(release, debug|release) {
   CONFIG += optimize_full
 }
@@ -20,16 +22,20 @@ DEFINES += QT_DEPRECATED_WARNINGS
 INCLUDEPATH += $$PWD/../lib
 
 HEADERS += \
-    testgames.h
+    testgames.h \
+    testmath.h
+    $$PWD/../lib/version.h
 
 SOURCES += \
     main.cpp \
-    testgames.cpp
+    testgames.cpp \
+    testmath.cpp
 
 win32 {
     PRE_TARGETDEPS += $$PWD/../lib $$DESTDIR/margean.lib
 } else {
     PRE_TARGETDEPS += $$PWD/../lib $$DESTDIR/libmargean.a
+    QMAKE_CXXFLAGS += -march=native -ffast-math
 }
 
 LIBS += -L$$OUT_PWD/../bin -lmargean

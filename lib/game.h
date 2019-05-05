@@ -27,6 +27,7 @@
 #include "piece.h"
 #include "square.h"
 
+class Movegen;
 class Node;
 class Game {
 public:
@@ -79,9 +80,13 @@ public:
 
     BitBoard board(Chess::Army army, Chess::Castle castle, bool kingsSquares = false) const;
     BitBoard board(Chess::Army army) const;
-    BitBoard attackBoard(Chess::Army army) const;
-    BitBoard attackBoard(Chess::PieceType piece, Chess::Army army) const;
     BitBoard board(Chess::PieceType piece) const;
+    BitBoard kingAttackBoard(Chess::Army army, const Movegen *gen) const;
+    BitBoard queenAttackBoard(Chess::Army army, const Movegen *gen) const;
+    BitBoard rookAttackBoard(Chess::Army army, const Movegen *gen) const;
+    BitBoard bishopAttackBoard(Chess::Army army, const Movegen *gen) const;
+    BitBoard knightAttackBoard(Chess::Army army, const Movegen *gen) const;
+    BitBoard pawnAttackBoard(Chess::Army army, const Movegen *gen) const;
 
     void pseudoLegalMoves(Node *parent) const;
     void generateCastle(Chess::Army army, Chess::Castle castleSide, Node *parent) const;
@@ -93,6 +98,7 @@ public:
     bool isSameGame(const Game &other) const;
     bool isSamePosition(const Game &other) const;
     bool operator==(const Game &other) const { return isSamePosition(other); }
+    bool operator!=(const Game &other) const { return !isSamePosition(other); }
 
     quint64 hash() const;
 
@@ -165,17 +171,6 @@ inline BitBoard Game::board(Chess::PieceType piece) const
 inline BitBoard Game::board(Chess::Army army) const
 {
     return army == Chess::White ? m_whitePositionBoard : m_blackPositionBoard;
-}
-
-inline BitBoard Game::attackBoard(Chess::Army army) const
-{
-    // FIXME Should consider wrapping this in
-    return attackBoard(Chess::King, army) |
-        attackBoard(Chess::Queen, army) |
-        attackBoard(Chess::Rook, army) |
-        attackBoard(Chess::Bishop, army) |
-        attackBoard(Chess::Knight, army) |
-        attackBoard(Chess::Pawn, army);
 }
 
 inline bool Game::isCastleAvailable(Chess::Army army, Chess::Castle castle) const

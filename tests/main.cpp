@@ -26,20 +26,27 @@
 #include "nn.h"
 #include "options.h"
 #include "testgames.h"
+#include "testmath.h"
+#include "version.h"
 #include "zobrist.h"
 
-#define APP_NAME "Allie"
+#define APP_NAME "AllieTests"
 
 int main(int argc, char* argv[])
 {
-    QCoreApplication app(argc, argv);
-    app.setApplicationName(APP_NAME);
+    QCoreApplication a(argc, argv);
+    a.setApplicationName(APP_NAME);
+    a.setApplicationVersion(versionString());
 
-    Options::globalInstance()->setOption("SyzygyPath", QCoreApplication::applicationDirPath() + QDir::separator() + "../../syzygy/");
+    Options::globalInstance()->setOption("SyzygyPath",
+        QCoreApplication::applicationDirPath() + QDir::separator() + "../../syzygy/");
 
     int rc = 0;
     TestGames test1;
     rc = QTest::qExec(&test1, argc, argv) == 0 ? rc : -1;
+
+    TestMath test2;
+    rc = QTest::qExec(&test2, argc, argv) == 0 ? rc : -1;
 
     return rc;
 }
