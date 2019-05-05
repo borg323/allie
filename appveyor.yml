@@ -23,7 +23,7 @@ install:
 - cmd: IF NOT EXIST c:\cache\zlib_build\ cmake -G "Visual Studio 15 2017 Win64" -DCMAKE_INSTALL_PREFIX=c:/cache/zlib_build ..
 - cmd: IF NOT EXIST c:\cache\zlib_build\ msbuild INSTALL.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 - cmd: cd C:\projects\allie
-- cmd: set PATH=%PATH%;C:\Qt\5.12.1\msvc2017_64\bin;
+- cmd: set PATH=%PATH%;C:\Qt\5.12\msvc2017_64\bin;
 cache:
   - C:\cache
   - 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.0'
@@ -35,5 +35,7 @@ artifacts:
     name: allie.exe
   - path: bin/margean.lib
     name: margean.lib
+on_finish:
+  - ps: $blockRdp = $true; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
 
 
